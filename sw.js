@@ -2,7 +2,7 @@
  * for the SheetJS vendor blob (large, rarely changes). Auto-claim + skipWaiting
  * combined with controllerchange auto-reload in index.html = updates apply
  * themselves; no manual reopen dance. */
-var CACHE = "timecard-v1";
+var CACHE = "timecard-v2";
 var PRECACHE = [
   "./", "./index.html", "./styles.css", "./app.js",
   "./data/wcirb_construction.js", "./data/schema.js",

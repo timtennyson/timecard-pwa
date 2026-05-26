@@ -306,12 +306,46 @@
       if (e.wcirb === w.code) o.selected = true;
       clsSel.appendChild(o);
     });
-    clsSel.addEventListener("change", function () { e.wcirb = clsSel.value; scheduleSave(); summary(); });
+    clsSel.addEventListener("change", function () {
+      e.wcirb = clsSel.value; e.manualClass = true;
+      scheduleSave(); summary(); refreshHint();
+    });
     second.appendChild(wrapField("WCIRB class", clsSel));
-    var desc = el("input", { type: "text", value: e.notes || "", placeholder: "Description (what you worked on)" });
-    desc.addEventListener("input", function () { e.notes = desc.value; scheduleSave(); });
+    var desc = el("input", { type: "text", value: e.notes || "",
+      placeholder: "Describe the work — auto-classifies from words like 'framing', 'paint', 'sewer'" });
+    desc.addEventListener("input", function () {
+      e.notes = desc.value;
+      if (!e.manualClass) {
+        var m = window.TC_classify(desc.value);
+        if (m && m.code !== e.wcirb) { e.wcirb = m.code; clsSel.value = m.code; summary(); }
+      }
+      scheduleSave(); refreshHint();
+    });
     second.appendChild(wrapField("Description", desc));
     row.appendChild(second);
+
+    // Offline keyword auto-classifier hint (no API; runs locally).
+    var hint = el("div", { style: "grid-column:1/-1;font-size:.72rem;color:#666;min-height:1.1em" });
+    row.appendChild(hint);
+    function refreshHint() {
+      if (e.manualClass) { hint.innerHTML = '<span style="color:#888">↳ class set manually — change dropdown to re-enable auto</span>'; return; }
+      var m = window.TC_classify(e.notes);
+      if (!m) { hint.textContent = ""; return; }
+      if (m.code === e.wcirb) {
+        hint.innerHTML = "↳ auto-classified <strong>" + esc(m.code) + "</strong> from description";
+      } else {
+        var w = window.TC_WCIRB.find(function (x) { return x.code === m.code; });
+        hint.innerHTML = '↳ suggested: <a href="#" style="color:var(--navy)">' +
+          esc(m.code) + " — " + esc((w && w.title) ? w.title.substring(0, 36) : "") + "</a>";
+        var lk = hint.querySelector("a");
+        lk.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          e.wcirb = m.code; clsSel.value = m.code; e.manualClass = false;
+          scheduleSave(); summary(); refreshHint();
+        });
+      }
+    }
+    refreshHint();
     return row;
   }
   function wrapField(label, input) {
@@ -509,15 +543,258 @@
     scheduleSave();
   }
 
-  // ----- Foreman mode (v1 placeholder) -----
+  // ----- Foreman mode -----
+  // Drop employee .xlsx exports here; pulls the JSON payload from the `_data`
+  // tab of each, lets the foreman review/edit/approve, and exports a single
+  // consolidated workbook (WCIRB Summary + Payroll + Detail).
   function renderForeman(app) {
-    var c = el("section", { class: "card" });
-    c.innerHTML =
-      '<h2>Foreman Mode</h2>' +
-      '<div class="empty">Coming next: drop the .xlsx timecards your employees send, ' +
-      'review/edit/approve, then export the consolidated State Fund WCIRB summary ' +
-      'and payroll workbook. For now use Employee mode on each phone.</div>';
-    app.appendChild(c);
+    var imp = el("section", { class: "card" });
+    imp.appendChild(el("h2", null, "Foreman Mode — import timecards"));
+    imp.appendChild(importZone());
+    app.appendChild(imp);
+
+    var loaded = (STATE.foreman && STATE.foreman.loaded) || {};
+    var keys = Object.keys(loaded);
+    if (!keys.length) {
+      app.appendChild(el("section", { class: "card", html:
+        '<div class="empty">No timecards loaded yet. Drop the <strong>.xlsx</strong> ' +
+        'files your employees send (or tap to pick) and they\'ll appear here for review.</div>' }));
+      return;
+    }
+    // group by week (most recent first)
+    var byWeek = {};
+    keys.forEach(function (k) {
+      var w = loaded[k].week_starting;
+      (byWeek[w] = byWeek[w] || []).push(k);
+    });
+    Object.keys(byWeek).sort().reverse().forEach(function (w) {
+      var card = el("section", { class: "card" });
+      card.appendChild(el("h2", null, "Week of " + w));
+      byWeek[w].sort(function (a, b) {
+        return loaded[a].employee.name < loaded[b].employee.name ? -1 : 1;
+      }).forEach(function (k) { card.appendChild(foremanTimecardRow(k, loaded[k])); });
+      app.appendChild(card);
+    });
+    // export consolidated
+    var ex = el("section", { class: "card" });
+    ex.appendChild(el("h2", null, "Export consolidated"));
+    var approvedCount = keys.filter(function (k) { return loaded[k].approved; }).length;
+    ex.appendChild(el("div", { class: "empty", style: "margin-bottom:.6rem" },
+      keys.length + " timecard(s) loaded — " + approvedCount + " approved."));
+    var btn = el("button", { class: "primary", type: "button" },
+      "Export consolidated workbook (.xlsx)");
+    btn.addEventListener("click", exportConsolidated);
+    ex.appendChild(btn);
+    ex.appendChild(el("div", { class: "empty", style: "margin-top:.5rem" },
+      "Produces: WCIRB Class Summary (State Fund) · Payroll by employee/week · Timecard Detail (audit)."));
+    app.appendChild(ex);
+  }
+
+  function importZone() {
+    var z = el("div", { style: "border:2px dashed var(--line);border-radius:10px;padding:1rem;text-align:center;background:#fafbfc" });
+    z.innerHTML = '<div style="margin-bottom:.5rem">📥 <strong>Drop employee timecard .xlsx files here</strong>, or pick:</div>';
+    var inp = el("input", { type: "file", accept: ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", multiple: "" });
+    z.appendChild(inp);
+    inp.addEventListener("change", function () {
+      Array.prototype.slice.call(inp.files).forEach(importXlsx);
+      inp.value = "";
+    });
+    z.addEventListener("dragover", function (e) { e.preventDefault(); z.style.background = "#eaf1ff"; });
+    z.addEventListener("dragleave", function () { z.style.background = "#fafbfc"; });
+    z.addEventListener("drop", function (e) {
+      e.preventDefault(); z.style.background = "#fafbfc";
+      Array.prototype.slice.call(e.dataTransfer.files).forEach(importXlsx);
+    });
+    return z;
+  }
+
+  function importXlsx(file) {
+    var fr = new FileReader();
+    fr.onload = function () {
+      try {
+        var wb = XLSX.read(new Uint8Array(fr.result), { type: "array" });
+        var ws = wb.Sheets["_data"];
+        if (!ws) { alert("Not a timecard file (missing _data tab): " + file.name); return; }
+        var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+        var jsonStr = rows[1] && rows[1][0];
+        var payload = JSON.parse(jsonStr);
+        var key = payload.employee.id + "|" + payload.week_starting;
+        STATE.foreman = STATE.foreman || { loaded: {} };
+        STATE.foreman.loaded[key] = {
+          employee: payload.employee,
+          week_starting: payload.week_starting,
+          entries: payload.entries || [],
+          submitted_at: payload.submitted_at,
+          approved: false, approved_by: "", approved_at: null,
+          source_file: file.name,
+        };
+        scheduleSave(); render();
+      } catch (err) {
+        alert("Failed to read " + file.name + ": " + (err && err.message || err));
+      }
+    };
+    fr.readAsArrayBuffer(file);
+  }
+
+  function foremanTimecardRow(key, tc) {
+    var rate = (tc.employee && tc.employee.base_rate) || 0;
+    var r = computeWeek({ week_starting: tc.week_starting, entries: tc.entries }, rate);
+    var row = el("div", { style: "border:1px solid var(--line);border-radius:8px;padding:.6rem;margin:.4rem 0;background:#fff" });
+    var head = el("div", { style: "display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem" });
+    var info = el("div", { style: "flex:1;min-width:200px" });
+    info.innerHTML =
+      "<strong>" + esc(tc.employee.name) + "</strong> " +
+      "<small style='color:#666'>$" + (rate || 0).toFixed(2) + "/hr · default " + esc(tc.employee.default_class || "—") + "</small>" +
+      "<div style='font-size:.86rem;color:#444'>Hours: <strong>" + fmtHrs(r.totals.hours) +
+      "</strong> (Reg " + fmtHrs(r.totals.reg) + " / 1.5× " + fmtHrs(r.totals.ot15) +
+      " / 2× " + fmtHrs(r.totals.ot2) + ") · Est. wages <strong>$" +
+      r.totals.wages.toFixed(2) + "</strong></div>" +
+      "<small style='color:#777'>" + esc(tc.source_file || "") + "</small>";
+    head.appendChild(info);
+    var actions = el("div", { style: "display:flex;gap:.3rem;align-items:center" });
+    var detailBtn = el("button", { class: "ghost", type: "button" }, "Edit entries");
+    var apprBtn = el("button", { class: tc.approved ? "primary" : "ghost", type: "button" },
+      tc.approved ? "✓ Approved" : "Approve");
+    apprBtn.addEventListener("click", function () {
+      tc.approved = !tc.approved;
+      tc.approved_at = tc.approved ? new Date().toISOString() : null;
+      scheduleSave(); render();
+    });
+    var rmBtn = el("button", { class: "ghost", type: "button" }, "✕");
+    rmBtn.addEventListener("click", function () {
+      if (confirm("Remove " + tc.employee.name + " week " + tc.week_starting + " from this consolidation?")) {
+        delete STATE.foreman.loaded[key]; scheduleSave(); render();
+      }
+    });
+    actions.appendChild(detailBtn); actions.appendChild(apprBtn); actions.appendChild(rmBtn);
+    head.appendChild(actions);
+    row.appendChild(head);
+
+    var detail = el("div", { style: "display:none;margin-top:.5rem;border-top:1px solid var(--line);padding-top:.5rem" });
+    tc.entries.forEach(function (e, idx) {
+      var er = el("div", {
+        style: "display:grid;grid-template-columns:120px 70px 1fr 90px 26px;gap:.3rem;margin:.2rem 0;align-items:center;font-size:.85rem"
+      });
+      var dateIn = el("input", { type: "date", value: e.date });
+      dateIn.addEventListener("input", function () { e.date = dateIn.value; scheduleSave(); render(); });
+      er.appendChild(dateIn);
+      var hrs = el("input", { type: "number", min: "0", step: "0.25", value: e.hours });
+      hrs.addEventListener("input", function () { e.hours = parseFloat(hrs.value) || 0; scheduleSave(); render(); });
+      er.appendChild(hrs);
+      var desc = el("input", { type: "text", value: e.notes || "", placeholder: "Description / job: " + (e.project || "") });
+      desc.addEventListener("input", function () { e.notes = desc.value; scheduleSave(); });
+      er.appendChild(desc);
+      var sel = el("select");
+      window.TC_WCIRB.forEach(function (w) {
+        var o = document.createElement("option");
+        o.value = w.code; o.textContent = w.code;
+        if (e.wcirb === w.code) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", function () { e.wcirb = sel.value; scheduleSave(); render(); });
+      er.appendChild(sel);
+      var rm = el("button", { class: "ghost", type: "button", style: "padding:.2rem" }, "✕");
+      rm.addEventListener("click", function () { tc.entries.splice(idx, 1); scheduleSave(); render(); });
+      er.appendChild(rm);
+      detail.appendChild(er);
+    });
+    row.appendChild(detail);
+    detailBtn.addEventListener("click", function () {
+      var open = detail.style.display !== "none";
+      detail.style.display = open ? "none" : "block";
+      detailBtn.textContent = open ? "Edit entries" : "Collapse";
+    });
+    return row;
+  }
+
+  function exportConsolidated() {
+    if (!window.XLSX) { alert("xlsx engine missing — reload while online."); return; }
+    var loaded = (STATE.foreman && STATE.foreman.loaded) || {};
+    var keys = Object.keys(loaded);
+    if (!keys.length) { alert("No timecards loaded."); return; }
+    var byClass = {}, perEW = [], detail = [];
+    keys.forEach(function (k) {
+      var tc = loaded[k];
+      var rate = (tc.employee && tc.employee.base_rate) || 0;
+      var r = computeWeek({ week_starting: tc.week_starting, entries: tc.entries }, rate);
+      perEW.push({
+        name: tc.employee.name, id: tc.employee.id, rate: rate, week: tc.week_starting,
+        hours: r.totals.hours, reg: r.totals.reg, ot15: r.totals.ot15, ot2: r.totals.ot2,
+        reg_pay: r.totals.reg * rate, ot15_pay: r.totals.ot15 * 1.5 * rate,
+        ot2_pay: r.totals.ot2 * 2 * rate, total: r.totals.wages,
+        approved: tc.approved ? "YES" : "no",
+      });
+      Object.keys(r.byClass).forEach(function (c) {
+        byClass[c] = byClass[c] || { hours: 0, wages: 0 };
+        byClass[c].hours += r.byClass[c].hours;
+        byClass[c].wages += r.byClass[c].wages;
+      });
+      (tc.entries || []).forEach(function (e) {
+        detail.push({
+          date: e.date, employee: tc.employee.name, eid: tc.employee.id,
+          job: e.project || "", wcirb: e.wcirb,
+          hours: parseFloat(e.hours) || 0, description: e.notes || "",
+        });
+      });
+    });
+
+    // ----- Tab 1: WCIRB Class Summary -----
+    var rows1 = [
+      ["WCIRB Class Summary — Consolidated (for State Fund reporting)"],
+      ["Generated", new Date().toISOString()],
+      ["Timecards", keys.length, "Approved", perEW.filter(function (p) { return p.approved === "YES"; }).length],
+      [],
+      ["WCIRB", "Classification", "Hours", "Est. wages"],
+    ];
+    var totH = 0, totW = 0;
+    Object.keys(byClass).sort().forEach(function (c) {
+      var w = window.TC_WCIRB.find(function (x) { return x.code === c; });
+      rows1.push([c, w ? w.title : "(unknown)", byClass[c].hours, byClass[c].wages]);
+      totH += byClass[c].hours; totW += byClass[c].wages;
+    });
+    rows1.push([]);
+    rows1.push(["", "TOTAL", totH, totW]);
+    var s1 = XLSX.utils.aoa_to_sheet(rows1);
+    s1["!cols"] = [{ wch: 10 }, { wch: 50 }, { wch: 10 }, { wch: 14 }];
+
+    // ----- Tab 2: Payroll -----
+    var rows2 = [
+      ["Payroll — Consolidated"],
+      ["Generated", new Date().toISOString()],
+      [],
+      ["Employee", "ID", "Week", "Rate", "Total hrs", "Reg hrs", "1.5× hrs", "2× hrs",
+       "Reg pay", "1.5× pay", "2× pay", "Total wages", "Approved"],
+    ];
+    perEW.sort(function (a, b) {
+      return a.week === b.week ? (a.name < b.name ? -1 : 1) : (a.week < b.week ? -1 : 1);
+    }).forEach(function (p) {
+      rows2.push([p.name, p.id, p.week, p.rate, p.hours, p.reg, p.ot15, p.ot2,
+                  p.reg_pay, p.ot15_pay, p.ot2_pay, p.total, p.approved]);
+    });
+    var s2 = XLSX.utils.aoa_to_sheet(rows2);
+    s2["!cols"] = [{ wch: 24 }, { wch: 8 }, { wch: 12 }, { wch: 8 }, { wch: 10 },
+                   { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 12 }, { wch: 12 },
+                   { wch: 12 }, { wch: 12 }, { wch: 10 }];
+
+    // ----- Tab 3: Timecard Detail -----
+    var rows3 = [
+      ["Timecard Detail — All Entries"], [],
+      ["Date", "Employee", "Employee ID", "Job", "WCIRB", "Hours", "Description"],
+    ];
+    detail.sort(function (a, b) {
+      return a.date === b.date ? (a.employee < b.employee ? -1 : 1) : (a.date < b.date ? -1 : 1);
+    }).forEach(function (e) {
+      rows3.push([e.date, e.employee, e.eid, e.job, e.wcirb, e.hours, e.description]);
+    });
+    var s3 = XLSX.utils.aoa_to_sheet(rows3);
+    s3["!cols"] = [{ wch: 11 }, { wch: 24 }, { wch: 8 }, { wch: 22 },
+                   { wch: 10 }, { wch: 8 }, { wch: 40 }];
+
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, s1, "WCIRB Summary");
+    XLSX.utils.book_append_sheet(wb, s2, "Payroll");
+    XLSX.utils.book_append_sheet(wb, s3, "Timecard Detail");
+    XLSX.writeFile(wb, "Consolidated_Timecards_" + iso(new Date()) + ".xlsx");
   }
 
   // ----- Boot + wire -----
