@@ -138,16 +138,9 @@
   }
 
   function renderEmployee(app) {
-    // Roster card (collapsible)
-    app.appendChild(rosterCard());
-
-    if (!STATE.roster.length) {
-      app.appendChild(el("section", { class: "card" },
-        '<h2>Welcome</h2><div class="empty">Add at least one employee in the Roster card above to start entering time.</div>'));
-      return;
-    }
-    if (!STATE.currentEmployeeId) STATE.currentEmployeeId = STATE.roster[0].id;
-
+    if (!STATE.roster.length) return renderEmployeeSetup(app);
+    var have = STATE.roster.find(function (e) { return e.id === STATE.currentEmployeeId; });
+    if (!have) return renderEmployeePicker(app);
     app.appendChild(weekNavCard());
     app.appendChild(entriesCard());
     app.appendChild(weekSummaryCard());
@@ -213,20 +206,21 @@
     var emp = STATE.roster.find(function (e) { return e.id === STATE.currentEmployeeId; });
     var ws = parseISO(STATE.weekStart);
 
-    var top = el("div", { style: "display:grid;grid-template-columns:1fr;gap:.6rem" });
-    var picker = el("label", { class: "fld" }, "Employee");
-    var sel = el("select");
-    STATE.roster.forEach(function (e) {
-      var o = document.createElement("option");
-      o.value = e.id; o.textContent = e.name + " ($" + (e.base_rate || 0) + "/hr · " + (e.default_class || "—") + ")";
-      if (e.id === STATE.currentEmployeeId) o.selected = true;
-      sel.appendChild(o);
+    // Pinned-user header (read-only on this device). Switch requires confirm.
+    var who = el("div", { style: "display:flex;justify-content:space-between;align-items:center;gap:.4rem;margin-bottom:.5rem;padding:.45rem .6rem;background:var(--chip);border-radius:6px" });
+    who.innerHTML = "<div><strong>" + esc(emp ? emp.name : "(unknown)") +
+      "</strong> <small style='color:#555'>$" +
+      (parseFloat(emp && emp.base_rate) || 0).toFixed(2) + "/hr · " +
+      esc((emp && emp.default_class) || "—") + "</small></div>";
+    var sw = el("button", { class: "ghost", type: "button", style: "font-size:.78rem;padding:.2rem .55rem" }, "Switch user");
+    sw.addEventListener("click", function () {
+      if (!confirm("Switch this phone's user? You'll pick yourself from the roster again. Your existing weeks stay on the device.")) return;
+      STATE.currentEmployeeId = ""; scheduleSave(); render();
     });
-    sel.addEventListener("change", function () { STATE.currentEmployeeId = sel.value; scheduleSave(); render(); });
-    picker.appendChild(sel);
-    top.appendChild(picker);
+    who.appendChild(sw);
+    c.appendChild(who);
 
-    var nav = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:.4rem" });
+    var nav = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:.4rem;flex-wrap:wrap" });
     var prev = el("button", { class: "ghost", type: "button" }, "◀ Prev");
     var lbl = el("strong", { style: "font-size:1rem" }, weekLabel(ws));
     var next = el("button", { class: "ghost", type: "button" }, "Next ▶");
@@ -235,8 +229,112 @@
     next.addEventListener("click", function () { STATE.weekStart = iso(addDays(ws, 7)); scheduleSave(); render(); });
     today.addEventListener("click", function () { STATE.weekStart = iso(weekStart(new Date())); scheduleSave(); render(); });
     nav.appendChild(prev); nav.appendChild(lbl); nav.appendChild(next); nav.appendChild(today);
-    top.appendChild(nav);
-    c.appendChild(top);
+    c.appendChild(nav);
+    return c;
+  }
+
+  // ----- Employee mode setup helpers -----
+  function renderEmployeeSetup(app) {
+    var c = el("section", { class: "card" });
+    c.innerHTML = "<h2>Welcome — set up this phone</h2>" +
+      '<div class="empty" style="margin-bottom:.6rem">Either import the roster file your foreman shared, or enter your own info manually.</div>';
+    var impWrap = el("div", { style: "border:1px solid var(--line);border-radius:8px;padding:.6rem;margin-bottom:.6rem" });
+    impWrap.innerHTML = "<strong>I have a roster file from my foreman</strong>";
+    var fi = el("input", { type: "file", accept: ".json,application/json" });
+    fi.style.marginTop = ".5rem"; fi.style.display = "block";
+    fi.addEventListener("change", function () {
+      var f = fi.files[0]; if (!f) return;
+      var fr = new FileReader();
+      fr.onload = function () {
+        try {
+          var arr = JSON.parse(fr.result);
+          if (!Array.isArray(arr)) throw new Error("Not a roster file");
+          STATE.roster = arr; scheduleSave(); render();
+        } catch (err) { alert("Couldn't read roster: " + (err.message || err)); }
+      };
+      fr.readAsText(f);
+    });
+    impWrap.appendChild(fi);
+    c.appendChild(impWrap);
+
+    var man = el("div", { style: "border:1px solid var(--line);border-radius:8px;padding:.6rem" });
+    man.innerHTML = "<strong>Or enter my info manually</strong>";
+    var nameI = el("input", { type: "text", placeholder: "Your name" });
+    var rateI = el("input", { type: "number", min: "0", step: "0.01", placeholder: "$/hr" });
+    var clsSel = el("select");
+    window.TC_WCIRB.forEach(function (w) {
+      var o = document.createElement("option");
+      o.value = w.code; o.textContent = w.code + " — " + w.title;
+      clsSel.appendChild(o);
+    });
+    [nameI, rateI, clsSel].forEach(function (n) { n.style.marginTop = ".4rem"; });
+    var save = el("button", { class: "primary", type: "button", style: "margin-top:.5rem" }, "Save & start");
+    save.addEventListener("click", function () {
+      var name = nameI.value.trim();
+      if (!name) { alert("Enter your name."); return; }
+      var id = "E" + String(Date.now()).slice(-6);
+      STATE.roster = [{ id: id, name: name, base_rate: parseFloat(rateI.value) || 0,
+                        default_class: clsSel.value, active: true }];
+      STATE.currentEmployeeId = id;
+      scheduleSave(); render();
+    });
+    man.appendChild(nameI); man.appendChild(rateI); man.appendChild(clsSel); man.appendChild(save);
+    c.appendChild(man);
+    app.appendChild(c);
+  }
+
+  function renderEmployeePicker(app) {
+    var c = el("section", { class: "card" });
+    c.innerHTML = "<h2>Which one are you?</h2>" +
+      '<div class="empty" style="margin-bottom:.5rem">Tap your name. Set once per device.</div>';
+    STATE.roster.forEach(function (e) {
+      var b = el("button", { class: "ghost", type: "button",
+        style: "display:block;width:100%;text-align:left;margin:.25rem 0;padding:.6rem" });
+      b.innerHTML = "<strong>" + esc(e.name) + "</strong>  <small style='color:#555'>$" +
+        (parseFloat(e.base_rate) || 0).toFixed(2) + "/hr · " + esc(e.default_class || "—") + "</small>";
+      b.addEventListener("click", function () {
+        STATE.currentEmployeeId = e.id; scheduleSave(); render();
+      });
+      c.appendChild(b);
+    });
+    app.appendChild(c);
+  }
+
+  // Foreman roster export/import — share roster.json with all employees.
+  function rosterShareCard() {
+    var c = el("section", { class: "card" });
+    c.innerHTML = "<h2>Roster file</h2>" +
+      '<div class="empty" style="margin-bottom:.5rem">Export once everyone\'s set up, then send the file to each employee\'s phone for a one-time import. (Or use the manual setup on each phone.)</div>';
+    var bar = el("div", { style: "display:flex;gap:.4rem;flex-wrap:wrap;align-items:center" });
+    var exp = el("button", { class: "primary", type: "button" }, "Export roster.json");
+    exp.addEventListener("click", function () {
+      var blob = new Blob([JSON.stringify(STATE.roster, null, 2)], { type: "application/json" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = "roster.json";
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { a.remove(); URL.revokeObjectURL(a.href); }, 800);
+    });
+    bar.appendChild(exp);
+    var lbl = el("label", { style: "display:inline-block;padding:.45rem .8rem;border-radius:6px;cursor:pointer;border:1px solid var(--navy);color:var(--navy);font-weight:600" }, "Import roster.json");
+    var fi = el("input", { type: "file", accept: ".json,application/json" });
+    fi.style.display = "none";
+    fi.addEventListener("change", function () {
+      var f = fi.files[0]; if (!f) return;
+      var fr = new FileReader();
+      fr.onload = function () {
+        try {
+          var arr = JSON.parse(fr.result);
+          if (!Array.isArray(arr)) throw new Error("Not a roster file");
+          if (!confirm("Replace current roster with " + arr.length + " imported entries?")) return;
+          STATE.roster = arr; scheduleSave(); render();
+        } catch (err) { alert("Couldn't read: " + (err.message || err)); }
+      };
+      fr.readAsText(f);
+      fi.value = "";
+    });
+    lbl.appendChild(fi);
+    bar.appendChild(lbl);
+    c.appendChild(bar);
     return c;
   }
 
@@ -543,13 +641,89 @@
     scheduleSave();
   }
 
+  // ----- Foreman access gate (client-side passcode; soft control) -----
+  // SHA-256 hash of the passcode stored in IndexedDB on the foreman's device.
+  // FOREMAN_UNLOCKED is session-only — locks again on reload / Lock button.
+  // This is the right model for THIS threat: employees only have their own
+  // data on their own devices anyway; the gate prevents accidental entry into
+  // Foreman mode on the foreman's device. A motivated attacker with devtools
+  // on the foreman's phone could bypass the gate — there's no defense against
+  // that without a backend. The .xlsx files traveling between devices are the
+  // real trust boundary; keep them on secure channels.
+  var FOREMAN_UNLOCKED = false;
+  function hashPasscode(p) {
+    var enc = new TextEncoder().encode(String(p || ""));
+    return crypto.subtle.digest("SHA-256", enc).then(function (buf) {
+      return Array.from(new Uint8Array(buf))
+        .map(function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+    });
+  }
+  function renderForemanSetup(app) {
+    var c = el("section", { class: "card" });
+    c.innerHTML = "<h2>Foreman setup — set a passcode</h2>" +
+      '<div class="empty" style="margin-bottom:.6rem">First-time setup on this device. Pick a passcode (≥4 chars). Only the foreman uses this tab — employees should use the <strong>Employee</strong> tab.</div>';
+    var p1 = el("input", { type: "password", placeholder: "New passcode", autocomplete: "new-password" });
+    var p2 = el("input", { type: "password", placeholder: "Confirm passcode", autocomplete: "new-password" });
+    p1.style.marginBottom = ".3rem"; p2.style.marginBottom = ".3rem";
+    var btn = el("button", { class: "primary", type: "button" }, "Set passcode");
+    var msg = el("div", { style: "color:var(--bad);font-size:.85rem;margin-top:.4rem" });
+    c.appendChild(p1); c.appendChild(p2); c.appendChild(btn); c.appendChild(msg);
+    btn.addEventListener("click", function () {
+      if (p1.value.length < 4) { msg.textContent = "At least 4 characters."; return; }
+      if (p1.value !== p2.value) { msg.textContent = "Passcodes do not match."; return; }
+      hashPasscode(p1.value).then(function (h) {
+        STATE.foremanPasscodeHash = h; scheduleSave();
+        FOREMAN_UNLOCKED = true; render();
+      });
+    });
+    app.appendChild(c);
+  }
+  function renderForemanLock(app) {
+    var c = el("section", { class: "card" });
+    c.innerHTML = "<h2>Foreman access</h2>" +
+      '<div class="empty" style="margin-bottom:.6rem">Enter the foreman passcode to review and export employee timecards.</div>';
+    var p = el("input", { type: "password", placeholder: "Passcode", autocomplete: "current-password" });
+    p.style.marginBottom = ".3rem";
+    var btn = el("button", { class: "primary", type: "button" }, "Unlock");
+    var reset = el("button", { class: "ghost", type: "button", style: "margin-left:.4rem" }, "Forgot / reset");
+    var msg = el("div", { style: "color:var(--bad);font-size:.85rem;margin-top:.4rem" });
+    c.appendChild(p); c.appendChild(btn); c.appendChild(reset); c.appendChild(msg);
+    function tryUnlock() {
+      hashPasscode(p.value).then(function (h) {
+        if (h === STATE.foremanPasscodeHash) { FOREMAN_UNLOCKED = true; render(); }
+        else msg.textContent = "Wrong passcode.";
+      });
+    }
+    btn.addEventListener("click", tryUnlock);
+    p.addEventListener("keydown", function (e) { if (e.key === "Enter") tryUnlock(); });
+    reset.addEventListener("click", function () {
+      if (!confirm("Reset foreman access on THIS device? This wipes the passcode and any imported employee timecards loaded here. Employees' own data on their devices is unaffected.")) return;
+      STATE.foremanPasscodeHash = null;
+      if (STATE.foreman) STATE.foreman.loaded = {};
+      FOREMAN_UNLOCKED = false; scheduleSave(); render();
+    });
+    app.appendChild(c);
+  }
   // ----- Foreman mode -----
   // Drop employee .xlsx exports here; pulls the JSON payload from the `_data`
   // tab of each, lets the foreman review/edit/approve, and exports a single
   // consolidated workbook (WCIRB Summary + Payroll + Detail).
   function renderForeman(app) {
+    if (!STATE.foremanPasscodeHash) return renderForemanSetup(app);
+    if (!FOREMAN_UNLOCKED) return renderForemanLock(app);
+
+    // Roster CRUD (foreman is the authority on who's on the crew + rates).
+    app.appendChild(rosterCard());
+    app.appendChild(rosterShareCard());
+
+    // Import section with Lock button so foreman can re-lock the tab.
     var imp = el("section", { class: "card" });
-    imp.appendChild(el("h2", null, "Foreman Mode — import timecards"));
+    var hdr = el("div", { style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem;flex-wrap:wrap;gap:.4rem" });
+    var ttl = el("h2", { style: "margin:0" }, "Import timecards"); hdr.appendChild(ttl);
+    var lockBtn = el("button", { class: "ghost", type: "button" }, "🔒 Lock");
+    lockBtn.addEventListener("click", function () { FOREMAN_UNLOCKED = false; render(); });
+    hdr.appendChild(lockBtn);
+    imp.appendChild(hdr);
     imp.appendChild(importZone());
     app.appendChild(imp);
 
