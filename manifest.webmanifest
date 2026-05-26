@@ -1,0 +1,15 @@
+{
+  "name": "Timecard — Alexander Building Co",
+  "short_name": "Timecard",
+  "description": "CA construction timecards (WCIRB-coded). Employees enter daily; foreman consolidates to State Fund + payroll.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6f8",
+  "theme_color": "#1f3a5f",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

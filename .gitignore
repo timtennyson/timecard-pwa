@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+*.key
+
+# Roster + real timecard data — confidential
+roster.json
+*_roster.json
+data/roster.json
+timecards/
+exports/
+projects/*
+
+# OS / build
+Thumbs.db
+.DS_Store
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
