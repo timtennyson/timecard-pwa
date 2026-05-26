@@ -148,16 +148,11 @@
   }
 
   function rosterCard() {
-    var open = !STATE.roster.length;     // auto-open when empty
     var c = el("section", { class: "card" });
-    var head = el("div", { html:
-      '<h2 style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">' +
-      '<span>Roster <small style="color:#666;font-weight:400">(' + STATE.roster.length + ')</small></span>' +
-      '<button type="button" class="ghost" style="font-size:.78rem;padding:.25rem .6rem">' +
-      (open ? "Hide" : "Manage") + "</button></h2>" });
-    c.appendChild(head);
+    c.appendChild(el("h2", null,
+      "Roster <small style='color:#666;font-weight:400'>(" + STATE.roster.length + ")</small>"));
     var body = el("div");
-    if (open) {
+    {
       STATE.roster.forEach(function (e, i) {
         var row = el("div", { class: "fld", style: "display:grid;grid-template-columns:1fr 100px 110px 30px;gap:.4rem;align-items:end" });
         row.innerHTML =
@@ -194,9 +189,6 @@
         }
       });
     }
-    head.querySelector("h2").addEventListener("click", function () {
-      open = !open; render();    // re-render; simple
-    });
     c.appendChild(body);
     return c;
   }
@@ -247,9 +239,8 @@
       var fr = new FileReader();
       fr.onload = function () {
         try {
-          var arr = JSON.parse(fr.result);
-          if (!Array.isArray(arr)) throw new Error("Not a roster file");
-          STATE.roster = arr; scheduleSave(); render();
+          applyRosterImport(JSON.parse(fr.result));
+          scheduleSave(); render();
         } catch (err) { alert("Couldn't read roster: " + (err.message || err)); }
       };
       fr.readAsText(f);
@@ -300,6 +291,47 @@
     app.appendChild(c);
   }
 
+  // ---- shared helpers ----
+  function downloadBlob(blob, fname) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = fname;
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { a.remove(); URL.revokeObjectURL(a.href); }, 1500);
+  }
+  // Roster file format: v2 = {employees:[...], foreman:{name,email}}.
+  // v1 (legacy) = array of employees. Both accepted on import.
+  function applyRosterImport(data) {
+    if (Array.isArray(data)) { STATE.roster = data; return; }
+    if (data && Array.isArray(data.employees)) {
+      STATE.roster = data.employees;
+      if (data.foreman) STATE.foremanContact = data.foreman;
+      return;
+    }
+    throw new Error("Not a roster file");
+  }
+
+  // Foreman contact info card — saved with the roster so employees know who to
+  // submit timecards to.
+  function foremanContactCard() {
+    var c = el("section", { class: "card" });
+    c.appendChild(el("h2", null, "Your contact (foreman)"));
+    c.appendChild(el("div", { class: "empty", style: "margin-bottom:.5rem" },
+      "Goes into the roster file so each employee's phone knows where to submit timecards."));
+    if (!STATE.foremanContact) STATE.foremanContact = { name: "", email: "" };
+    var fc = STATE.foremanContact;
+    var grid = el("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:.4rem" });
+    function fld(label, key, type) {
+      var w = el("label", { class: "fld", style: "margin:0" }, esc(label));
+      var inp = el("input", { type: type || "text", value: fc[key] || "" });
+      inp.addEventListener("input", function () { fc[key] = inp.value; scheduleSave(); });
+      w.appendChild(inp); return w;
+    }
+    grid.appendChild(fld("Name", "name"));
+    grid.appendChild(fld("Email", "email", "email"));
+    c.appendChild(grid);
+    return c;
+  }
+
   // Foreman roster export/import — share roster.json with all employees.
   function rosterShareCard() {
     var c = el("section", { class: "card" });
@@ -308,11 +340,9 @@
     var bar = el("div", { style: "display:flex;gap:.4rem;flex-wrap:wrap;align-items:center" });
     var exp = el("button", { class: "primary", type: "button" }, "Export roster.json");
     exp.addEventListener("click", function () {
-      var blob = new Blob([JSON.stringify(STATE.roster, null, 2)], { type: "application/json" });
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob); a.download = "roster.json";
-      document.body.appendChild(a); a.click();
-      setTimeout(function () { a.remove(); URL.revokeObjectURL(a.href); }, 800);
+      var payload = { v: 2, employees: STATE.roster, foreman: STATE.foremanContact || null };
+      var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      downloadBlob(blob, "roster.json");
     });
     bar.appendChild(exp);
     var lbl = el("label", { style: "display:inline-block;padding:.45rem .8rem;border-radius:6px;cursor:pointer;border:1px solid var(--navy);color:var(--navy);font-weight:600" }, "Import roster.json");
@@ -323,10 +353,10 @@
       var fr = new FileReader();
       fr.onload = function () {
         try {
-          var arr = JSON.parse(fr.result);
-          if (!Array.isArray(arr)) throw new Error("Not a roster file");
-          if (!confirm("Replace current roster with " + arr.length + " imported entries?")) return;
-          STATE.roster = arr; scheduleSave(); render();
+          var data = JSON.parse(fr.result);
+          var nemp = (Array.isArray(data) ? data : (data && data.employees) || []).length;
+          if (!confirm("Replace current roster with " + nemp + " imported entries?")) return;
+          applyRosterImport(data); scheduleSave(); render();
         } catch (err) { alert("Couldn't read: " + (err.message || err)); }
       };
       fr.readAsText(f);
@@ -561,12 +591,24 @@
   // ----- Export to .xlsx (SheetJS) -----
   function exportCard() {
     var c = el("section", { class: "card" });
-    c.appendChild(el("h2", null, "Export"));
-    var btn = el("button", { class: "primary", type: "button" }, "Export this week as .xlsx");
+    c.appendChild(el("h2", null, "Submit"));
+    var fc = STATE.foremanContact || {};
+    if (fc.name || fc.email) {
+      var to = el("div", { style: "margin-bottom:.6rem;font-size:.9rem;background:var(--chip);padding:.45rem .7rem;border-radius:6px" });
+      to.innerHTML = "📨 To: <strong>" + esc(fc.name || "your foreman") + "</strong>" +
+        (fc.email ? " &lt;" + esc(fc.email) + "&gt;" : "");
+      c.appendChild(to);
+    }
+    var btn = el("button", { class: "primary", type: "button" }, "📤 Submit weekly timecard");
     btn.addEventListener("click", exportWeek);
     c.appendChild(btn);
     c.appendChild(el("div", { class: "empty", style: "margin-top:.5rem" },
-      "Generates a per-employee timecard workbook (saved to your phone). Send the file to your foreman; they import it in Foreman mode to consolidate."));
+      "Generates the .xlsx and opens the share sheet (Mail / Messages / AirDrop). A copy stays on this phone — you can edit and re-submit."));
+    var tc = getOrInitTimecard();
+    if (tc.submitted_at) {
+      c.appendChild(el("div", { style: "margin-top:.4rem;font-size:.78rem;color:var(--good)" },
+        "✓ Last submitted " + new Date(tc.submitted_at).toLocaleString()));
+    }
     return c;
   }
 
@@ -637,8 +679,35 @@
     XLSX.utils.book_append_sheet(wb, s2, "WCIRB Summary");
     XLSX.utils.book_append_sheet(wb, s3, "_data");
     var fname = "Timecard_" + emp.name.replace(/\s+/g, "_") + "_W" + STATE.weekStart + ".xlsx";
-    XLSX.writeFile(wb, fname);
-    scheduleSave();
+    var array = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+    var blob = new Blob([array], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    var fc = STATE.foremanContact || {};
+    var noteLines = ["Timecard from " + emp.name + " — week of " + STATE.weekStart + "."];
+    if (fc.name) noteLines.push("Send to: " + fc.name + (fc.email ? " <" + fc.email + ">" : ""));
+    var note = noteLines.join("\n");
+    // Try native share sheet with the file attached (iOS / Android / desktop where supported).
+    try {
+      var file = new File([blob], fname, { type: blob.type });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({
+          files: [file],
+          title: "Timecard — " + emp.name + " — " + STATE.weekStart,
+          text: note,
+        }).then(function () { scheduleSave(); render(); })
+          .catch(function (err) {
+            if (err && err.name === "AbortError") return;
+            downloadBlob(blob, fname);
+            scheduleSave(); render();
+          });
+        return;
+      }
+    } catch (e) { /* fall through to download */ }
+    downloadBlob(blob, fname);
+    var to = fc.email ? (" Send the file to " + fc.email + ".")
+           : fc.name ? (" Send the file to " + fc.name + ".")
+           : "";
+    alert("Saved " + fname + " on this phone." + to);
+    scheduleSave(); render();
   }
 
   // ----- Foreman access gate (client-side passcode; soft control) -----
@@ -714,6 +783,7 @@
 
     // Roster CRUD (foreman is the authority on who's on the crew + rates).
     app.appendChild(rosterCard());
+    app.appendChild(foremanContactCard());
     app.appendChild(rosterShareCard());
 
     // Import section with Lock button so foreman can re-lock the tab.
