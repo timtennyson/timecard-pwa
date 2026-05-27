@@ -16,20 +16,24 @@
  */
 window.TC_WCIRB = [
   // ---- Carpentry (high-wage) ----
-  // 5403 is the DEFAULT for general carpentry work (commercial, multi-family,
-  // most ABCI jobs). 5645 only when the project is strictly a detached one-
-  // or two-family dwelling (incl. ADUs) — most generic carpentry stays on 5403.
-  { code: "5403", title: "Carpentry — N.O.C. (default)", group: "construction",
+  // 5645 is the DEFAULT — ABCI's work is primarily detached residential
+  // (incl. ADUs). Switch to 5403 only on commercial / multi-family / mixed-use.
+  // Low-wage dual of 5645 is 5651 (intentionally omitted; add back if any
+  // worker is paid below the WCIRB dual-wage threshold).
+  { code: "5645",
+    title: "Carpentry — Detached 1-2 family dwelling / ADU (default)",
+    group: "construction",
     keywords: ["frame", "framing", "framer", "stud", "joist", "rafter", "sheath",
                "shear", "header", "blocking", "deck", "decking", "trim", "finish carpentry",
                "cabinet", "door", "window", "siding", "fascia", "soffit", "subfloor",
-               "wall", "stair", "handrail", "addition", "commercial framing",
-               "multi-family", "multi family", "mixed use", "office build",
-               "tenant improvement", "ti", "store front", "storefront"] },
-  { code: "5645", title: "Carpentry — Detached 1-2 family dwelling / ADU",
+               "wall", "stair", "handrail", "addition", "detached residence",
+               "detached residential", "single family residence", "duplex", "adu",
+               "owner builder home"] },
+  { code: "5403",
+    title: "Carpentry — N.O.C. (commercial / multi-family)",
     group: "construction",
-    keywords: ["detached residence", "detached residential",
-               "single family residence", "duplex", "adu", "owner builder home"] },
+    keywords: ["commercial framing", "multi-family", "multi family", "mixed use",
+               "office build", "tenant improvement", "ti", "store front", "storefront"] },
 
   // ---- Trades ----
   { code: "5474", title: "Painting / Paperhanging — N.O.C.", group: "construction",
