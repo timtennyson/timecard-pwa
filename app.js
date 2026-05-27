@@ -75,6 +75,11 @@
   // ----- STATE -----
   var STATE;            // {roster:[], currentEmployeeId, weekStart (ISO), timecards: {key: WeekTimecard}}
   var SAVE_T;
+  // UI-only (not persisted): which days are expanded in the entries view.
+  // Map of ISO date -> true if the user has opened that day for editing.
+  // Today auto-opens on first render of the current week; non-current weeks
+  // stay collapsed until the user taps Edit/Add.
+  var DAY_OPEN = {};
   function blankState() {
     return {
       roster: [],
@@ -391,23 +396,58 @@
     tc.entries.forEach(function (e, idx) {
       (byDate[e.date] = byDate[e.date] || []).push({ e: e, idx: idx });
     });
+    var todayISO = iso(new Date());
     for (var i = 0; i < 7; i++) {
       var d = addDays(ws, i);
       var diso = iso(d);
       var rows = byDate[diso] || [];
-      var dayWrap = el("div", { style: "border-top:1px solid var(--line);padding:.6rem 0" });
-      var head = el("div", { style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem" });
-      head.appendChild(el("strong", null, DAYS[i] + " " + (d.getMonth() + 1) + "/" + d.getDate()));
       var dayHrs = rows.reduce(function (s, r) { return s + (parseFloat(r.e.hours) || 0); }, 0);
-      head.appendChild(el("span", { style: "color:" + (dayHrs > 12 ? "var(--bad)" : dayHrs > 8 ? "var(--warn)" : "#444") },
-        fmtHrs(dayHrs) + "h"));
-      dayWrap.appendChild(head);
-      rows.forEach(function (r) { dayWrap.appendChild(entryRow(r.idx, r.e)); });
-      var addBtn = el("button", { class: "ghost", type: "button", style: "margin-top:.3rem;width:100%" }, "+ Add entry for " + DAYS[i]);
-      (function (dateISO) {
-        addBtn.addEventListener("click", function () { addEntry(dateISO); });
+      var isToday = diso === todayISO;
+      // First view of the current week auto-opens today; everything else
+      // collapses until the user taps Edit/Add.
+      if (!(diso in DAY_OPEN) && isToday) DAY_OPEN[diso] = true;
+      var open = !!DAY_OPEN[diso];
+
+      var dayWrap = el("div", { style: "border-top:1px solid var(--line);padding:.6rem 0" });
+      var head = el("div", { style: "display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap" });
+      head.appendChild(el("strong", null,
+        DAYS[i] + " " + (d.getMonth() + 1) + "/" + d.getDate() + (isToday ? " · today" : "")));
+      var hrsColor = dayHrs > 12 ? "var(--bad)" : dayHrs > 8 ? "var(--warn)" : "#444";
+      head.appendChild(el("span", { style: "color:" + hrsColor + ";font-variant-numeric:tabular-nums" },
+        fmtHrs(dayHrs) + "h" + (rows.length ? " · " + rows.length + (rows.length === 1 ? " entry" : " entries") : "")));
+      var toggleBtn = el("button", { class: "ghost", type: "button", style: "padding:.25rem .6rem;margin-left:auto" },
+        open ? "✓ Done" : (rows.length ? "✎ Edit" : "+ Add"));
+      (function (diso2) {
+        toggleBtn.addEventListener("click", function () {
+          var was = !!DAY_OPEN[diso2];
+          DAY_OPEN[diso2] = !was;
+          // Opening an empty day: auto-create a first entry so the user has
+          // something to type into immediately.
+          if (!was && (byDate[diso2] || []).length === 0) { addEntry(diso2); return; }
+          render();
+        });
       })(diso);
-      dayWrap.appendChild(addBtn);
+      head.appendChild(toggleBtn);
+      dayWrap.appendChild(head);
+
+      if (open) {
+        rows.forEach(function (r) { dayWrap.appendChild(entryRow(r.idx, r.e)); });
+        var addBtn = el("button", { class: "ghost", type: "button", style: "margin-top:.3rem;width:100%" }, "+ Add entry for " + DAYS[i]);
+        (function (dateISO) {
+          addBtn.addEventListener("click", function () { addEntry(dateISO); });
+        })(diso);
+        dayWrap.appendChild(addBtn);
+      } else if (rows.length) {
+        // Collapsed preview: one-liner per entry so the user can scan the
+        // week without expanding every day.
+        var preview = el("div", { style: "font-size:.78rem;color:#555;margin-top:.2rem;line-height:1.35" });
+        preview.textContent = rows.map(function (r) {
+          var bits = [fmtHrs(parseFloat(r.e.hours) || 0) + "h", r.e.wcirb];
+          if (r.e.project) bits.push(r.e.project);
+          return bits.join(" · ");
+        }).join("  |  ");
+        dayWrap.appendChild(preview);
+      }
       c.appendChild(dayWrap);
     }
     return c;
@@ -421,11 +461,15 @@
     var job = el("input", { type: "text", value: e.project || "", list: "jobsList", placeholder: "Job / address" });
     job.addEventListener("input", function () { e.project = job.value; scheduleSave(); });
     row.appendChild(wrapField("Job", job));
-    var rm = el("button", { class: "ghost", type: "button", style: "align-self:end;padding:.3rem" }, "✕");
+    var rm = el("button", { class: "ghost", type: "button", style: "align-self:end;justify-self:end;padding:.25rem .55rem;min-width:32px" }, "✕");
     rm.addEventListener("click", function () {
+      if (!confirm("Remove this entry?")) return;
       var tc = getOrInitTimecard(); tc.entries.splice(idx, 1); scheduleSave(); render();
     });
-    row.appendChild(wrapField(" ", rm));
+    // Append the button DIRECTLY (no <label> wrapper): wrapping it in a label
+    // caused clicks anywhere in the 80px third column to forward to the button
+    // via label-control association, silently deleting the entry.
+    row.appendChild(rm);
     var second = el("div", { style: "grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:.4rem" });
     var clsSel = el("select");
     window.TC_WCIRB.forEach(function (w) {
@@ -682,31 +726,36 @@
     var array = XLSX.write(wb, { type: "array", bookType: "xlsx" });
     var blob = new Blob([array], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     var fc = STATE.foremanContact || {};
-    var noteLines = ["Timecard from " + emp.name + " — week of " + STATE.weekStart + "."];
-    if (fc.name) noteLines.push("Send to: " + fc.name + (fc.email ? " <" + fc.email + ">" : ""));
-    var note = noteLines.join("\n");
-    // Try native share sheet with the file attached (iOS / Android / desktop where supported).
-    try {
-      var file = new File([blob], fname, { type: blob.type });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        navigator.share({
-          files: [file],
-          title: "Timecard — " + emp.name + " — " + STATE.weekStart,
-          text: note,
-        }).then(function () { scheduleSave(); render(); })
-          .catch(function (err) {
-            if (err && err.name === "AbortError") return;
-            downloadBlob(blob, fname);
-            scheduleSave(); render();
-          });
-        return;
-      }
-    } catch (e) { /* fall through to download */ }
+    // Always save a local copy first so the user can attach it from Downloads.
     downloadBlob(blob, fname);
-    var to = fc.email ? (" Send the file to " + fc.email + ".")
-           : fc.name ? (" Send the file to " + fc.name + ".")
-           : "";
-    alert("Saved " + fname + " on this phone." + to);
+    // Pull up the device's email composer with foreman / subject / body
+    // prefilled. mailto: can't carry attachments reliably across email
+    // clients, so the .xlsx is downloaded above and the user taps the
+    // paperclip in Mail to attach it from Downloads.
+    var toEmail = (fc.email || "").trim();
+    var subject = "Timecard — " + emp.name + " — week of " + STATE.weekStart;
+    var bodyLines = [
+      fc.name ? "Hi " + fc.name + "," : "Hi,",
+      "",
+      "Attached is my timecard for the week starting " + STATE.weekStart + ".",
+      "Total: " + fmtHrs(r.totals.hours) + "h  (Reg " + fmtHrs(r.totals.reg)
+        + " | 1.5x " + fmtHrs(r.totals.ot15)
+        + " | 2x " + fmtHrs(r.totals.ot2) + ")",
+      "Est. wages: $" + r.totals.wages.toFixed(2),
+      "",
+      "File: " + fname + " — please attach it from Downloads.",
+      "",
+      "— " + emp.name,
+    ];
+    var mailto = "mailto:" + encodeURIComponent(toEmail)
+      + "?subject=" + encodeURIComponent(subject)
+      + "&body=" + encodeURIComponent(bodyLines.join("\r\n"));
+    // Use a synthetic <a>.click() so the OS email handler opens reliably on
+    // iOS Safari and Android Chrome (window.location.href can be flaky in
+    // some standalone-PWA contexts).
+    var a = document.createElement("a");
+    a.href = mailto; a.rel = "noopener"; a.style.display = "none";
+    document.body.appendChild(a); a.click(); a.remove();
     scheduleSave(); render();
   }
 
