@@ -146,6 +146,8 @@
     if (!STATE.roster.length) return renderEmployeeSetup(app);
     var have = STATE.roster.find(function (e) { return e.id === STATE.currentEmployeeId; });
     if (!have) return renderEmployeePicker(app);
+    // Per-employee passcode gate (set by foreman; session-only unlock).
+    if (have.passHash && !EMPLOYEE_UNLOCKED) return renderEmployeeLock(app, have);
     app.appendChild(weekNavCard());
     app.appendChild(entriesCard());
     app.appendChild(weekSummaryCard());
@@ -168,6 +170,34 @@
           '</select></label>' +
           '<button type="button" data-i="' + i + '" data-act="rm" class="ghost" style="padding:.3rem">✕</button>';
         body.appendChild(row);
+        // Passcode status + Set/Reset/Clear buttons per employee. Hashed
+        // client-side; employee enters it on the Employee tab to access
+        // their own page. Set by the foreman; share out-of-band.
+        var pc = el("div", { style: "display:flex;align-items:center;gap:.5rem;font-size:.78rem;color:#555;margin:-.25rem 0 .55rem;padding-left:.2rem" });
+        pc.appendChild(document.createTextNode(e.passHash ? "🔒 Passcode set" : "🔓 No passcode — anyone can pick this employee"));
+        var setBtn = el("button", { class: "ghost", type: "button", style: "font-size:.78rem;padding:.18rem .55rem;margin-left:auto" }, e.passHash ? "Reset" : "Set");
+        (function (idx) {
+          setBtn.addEventListener("click", function () {
+            var newP = prompt("New passcode for " + STATE.roster[idx].name + " (>=4 chars). Share it with the employee out-of-band (text / verbal):");
+            if (newP == null) return;
+            if (newP.length < 4) { alert("Passcode must be at least 4 characters."); return; }
+            hashPasscode(newP).then(function (h) {
+              STATE.roster[idx].passHash = h; scheduleSave(); render();
+            });
+          });
+        })(i);
+        pc.appendChild(setBtn);
+        if (e.passHash) {
+          var clrBtn = el("button", { class: "ghost", type: "button", style: "font-size:.78rem;padding:.18rem .55rem" }, "Clear");
+          (function (idx) {
+            clrBtn.addEventListener("click", function () {
+              if (!confirm("Clear passcode for " + STATE.roster[idx].name + "?")) return;
+              STATE.roster[idx].passHash = null; scheduleSave(); render();
+            });
+          })(i);
+          pc.appendChild(clrBtn);
+        }
+        body.appendChild(pc);
       });
       var add = el("button", { class: "primary", type: "button", style: "margin-top:.5rem" }, "+ Add Employee");
       add.addEventListener("click", function () {
@@ -206,13 +236,12 @@
     // Pinned-user header (read-only on this device). Switch requires confirm.
     var who = el("div", { style: "display:flex;justify-content:space-between;align-items:center;gap:.4rem;margin-bottom:.5rem;padding:.45rem .6rem;background:var(--chip);border-radius:6px" });
     who.innerHTML = "<div><strong>" + esc(emp ? emp.name : "(unknown)") +
-      "</strong> <small style='color:#555'>$" +
-      (parseFloat(emp && emp.base_rate) || 0).toFixed(2) + "/hr · " +
+      "</strong> <small style='color:#555'>" +
       esc((emp && emp.default_class) || "—") + "</small></div>";
     var sw = el("button", { class: "ghost", type: "button", style: "font-size:.78rem;padding:.2rem .55rem" }, "Switch user");
     sw.addEventListener("click", function () {
       if (!confirm("Switch this phone's user? You'll pick yourself from the roster again. Your existing weeks stay on the device.")) return;
-      STATE.currentEmployeeId = ""; scheduleSave(); render();
+      STATE.currentEmployeeId = ""; EMPLOYEE_UNLOCKED = false; scheduleSave(); render();
     });
     who.appendChild(sw);
     c.appendChild(who);
@@ -256,25 +285,24 @@
     var man = el("div", { style: "border:1px solid var(--line);border-radius:8px;padding:.6rem" });
     man.innerHTML = "<strong>Or enter my info manually</strong>";
     var nameI = el("input", { type: "text", placeholder: "Your name" });
-    var rateI = el("input", { type: "number", min: "0", step: "0.01", placeholder: "$/hr" });
     var clsSel = el("select");
     window.TC_WCIRB.forEach(function (w) {
       var o = document.createElement("option");
       o.value = w.code; o.textContent = w.code + " — " + w.title;
       clsSel.appendChild(o);
     });
-    [nameI, rateI, clsSel].forEach(function (n) { n.style.marginTop = ".4rem"; });
+    [nameI, clsSel].forEach(function (n) { n.style.marginTop = ".4rem"; });
     var save = el("button", { class: "primary", type: "button", style: "margin-top:.5rem" }, "Save & start");
     save.addEventListener("click", function () {
       var name = nameI.value.trim();
       if (!name) { alert("Enter your name."); return; }
       var id = "E" + String(Date.now()).slice(-6);
-      STATE.roster = [{ id: id, name: name, base_rate: parseFloat(rateI.value) || 0,
+      STATE.roster = [{ id: id, name: name,
                         default_class: clsSel.value, active: true }];
       STATE.currentEmployeeId = id;
       scheduleSave(); render();
     });
-    man.appendChild(nameI); man.appendChild(rateI); man.appendChild(clsSel); man.appendChild(save);
+    man.appendChild(nameI); man.appendChild(clsSel); man.appendChild(save);
     c.appendChild(man);
     app.appendChild(c);
   }
@@ -292,7 +320,10 @@
       b.innerHTML = "<strong>" + esc(e.name) + "</strong>  <small style='color:#555'>" +
         esc(e.default_class || "—") + "</small>";
       b.addEventListener("click", function () {
-        STATE.currentEmployeeId = e.id; scheduleSave(); render();
+        STATE.currentEmployeeId = e.id;
+        // If passcode set, renderEmployee gate prompts. Else, unlock now.
+        EMPLOYEE_UNLOCKED = !e.passHash;
+        scheduleSave(); render();
       });
       c.appendChild(b);
     });
@@ -308,6 +339,31 @@
   }
   // Roster file format: v2 = {employees:[...], foreman:{name,email}}.
   // v1 (legacy) = array of employees. Both accepted on import.
+  function renderEmployeeLock(app, emp) {
+    var c = el("section", { class: "card" });
+    c.innerHTML = "<h2>" + esc(emp.name) + " — enter passcode</h2>" +
+      '<div class="empty" style="margin-bottom:.6rem">Your foreman set this. If you don\'t know it, ask the foreman.</div>';
+    var p = el("input", { type: "password", placeholder: "Passcode", autocomplete: "current-password" });
+    p.style.marginBottom = ".4rem"; p.style.width = "100%";
+    var btn = el("button", { class: "primary", type: "button" }, "Unlock");
+    var sw = el("button", { class: "ghost", type: "button", style: "margin-left:.4rem" }, "Not me");
+    var msg = el("div", { style: "color:var(--bad);font-size:.85rem;margin-top:.4rem" });
+    c.appendChild(p); c.appendChild(btn); c.appendChild(sw); c.appendChild(msg);
+    function tryUnlock() {
+      hashPasscode(p.value).then(function (h) {
+        if (h === emp.passHash) { EMPLOYEE_UNLOCKED = true; render(); }
+        else { msg.textContent = "Wrong passcode."; }
+      });
+    }
+    btn.addEventListener("click", tryUnlock);
+    p.addEventListener("keydown", function (e) { if (e.key === "Enter") tryUnlock(); });
+    sw.addEventListener("click", function () {
+      STATE.currentEmployeeId = ""; EMPLOYEE_UNLOCKED = false; scheduleSave(); render();
+    });
+    app.appendChild(c);
+    setTimeout(function () { try { p.focus(); } catch (e) { } }, 50);
+  }
+
   function applyRosterImport(data) {
     if (Array.isArray(data)) { STATE.roster = data; return; }
     if (data && Array.isArray(data.employees)) {
@@ -348,7 +404,13 @@
     var bar = el("div", { style: "display:flex;gap:.4rem;flex-wrap:wrap;align-items:center" });
     var exp = el("button", { class: "primary", type: "button" }, "Export roster.json");
     exp.addEventListener("click", function () {
-      var payload = { v: 2, employees: STATE.roster, foreman: STATE.foremanContact || null };
+      // Slim view: NEVER include base_rate in the file employees import —
+      // rates are confidential between employees. Foreman keeps the master
+      // rates in his local IndexedDB roster only.
+      var payload = { v: 2, employees: STATE.roster.map(function (e) {
+        return { id: e.id, name: e.name, default_class: e.default_class,
+                 passHash: e.passHash || null, active: e.active !== false };
+      }), foreman: STATE.foremanContact || null };
       var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       downloadBlob(blob, "roster.json");
     });
@@ -610,20 +672,17 @@
     tot.appendChild(stat("1.5×", fmtHrs(t.ot15)));
     tot.appendChild(stat("2×", fmtHrs(t.ot2)));
     c.appendChild(tot);
-    c.appendChild(el("div", { style: "font-size:.86rem;color:#444;margin-bottom:.5rem" },
-      "Est. wages @ $" + (rate || 0).toFixed(2) + "/hr: <strong>$" + (t.wages || 0).toFixed(2) + "</strong>"));
     // per-class table
     var cls = Object.keys(r.byClass);
     if (cls.length) {
       var tbl = el("table", { style: "width:100%;border-collapse:collapse;font-size:.86rem" });
-      tbl.innerHTML = "<tr style='text-align:left;background:var(--chip)'><th style='padding:.3rem'>WCIRB</th><th>Class</th><th style='text-align:right'>Hours</th><th style='text-align:right'>Est. wages</th></tr>";
+      tbl.innerHTML = "<tr style='text-align:left;background:var(--chip)'><th style='padding:.3rem'>WCIRB</th><th>Class</th><th style='text-align:right'>Hours</th></tr>";
       cls.sort().forEach(function (k) {
         var w = window.TC_WCIRB.find(function (x) { return x.code === k; });
         var tr = el("tr", { style: "border-top:1px solid var(--line)" });
         tr.innerHTML = "<td style='padding:.3rem;font-weight:600'>" + esc(k) + "</td>" +
           "<td style='padding:.3rem'>" + esc(w ? w.title : "(unknown)") + "</td>" +
-          "<td style='padding:.3rem;text-align:right'>" + fmtHrs(r.byClass[k].hours) + "</td>" +
-          "<td style='padding:.3rem;text-align:right'>$" + r.byClass[k].wages.toFixed(2) + "</td>";
+          "<td style='padding:.3rem;text-align:right'>" + fmtHrs(r.byClass[k].hours) + "</td>";
         tbl.appendChild(tr);
       });
       c.appendChild(tbl);
@@ -671,7 +730,7 @@
     // Tab 1 — Timecard (daily entries)
     var rows1 = [
       ["Timecard"],
-      ["Employee", emp.name, "ID", emp.id, "Rate/hr", emp.base_rate || 0],
+      ["Employee", emp.name, "ID", emp.id],
       ["Week starting", STATE.weekStart, "(Mon–Sun)"],
       ["Submitted", tc.submitted_at],
       [],
@@ -694,7 +753,6 @@
     rows1.push([]);
     rows1.push(["", "WEEK TOTAL", "", "", r.totals.hours,
       "Reg " + fmtHrs(r.totals.reg) + " | 1.5x " + fmtHrs(r.totals.ot15) + " | 2x " + fmtHrs(r.totals.ot2)]);
-    rows1.push(["", "Est. wages", "", "", "", "$" + r.totals.wages.toFixed(2)]);
     rows1.push([]);
     rows1.push(["Employee signature: _______________________  Date: __________"]);
     rows1.push(["Foreman approval:   _______________________  Date: __________"]);
@@ -704,19 +762,19 @@
     // Tab 2 — Class summary (State Fund payload axis)
     var rows2 = [["WCIRB Class Summary — for State Fund reporting"],
       ["Employee", emp.name, "ID", emp.id], ["Week starting", STATE.weekStart], [],
-      ["WCIRB", "Classification", "Hours", "Est. wages"]];
+      ["WCIRB", "Classification", "Hours"]];
     Object.keys(r.byClass).sort().forEach(function (k) {
       var w = window.TC_WCIRB.find(function (x) { return x.code === k; });
-      rows2.push([k, w ? w.title : "(unknown)", r.byClass[k].hours, r.byClass[k].wages]);
+      rows2.push([k, w ? w.title : "(unknown)", r.byClass[k].hours]);
     });
     rows2.push([]);
-    rows2.push(["", "TOTAL", r.totals.hours, r.totals.wages]);
+    rows2.push(["", "TOTAL", r.totals.hours]);
     var s2 = XLSX.utils.aoa_to_sheet(rows2);
     s2["!cols"] = [{ wch: 10 }, { wch: 44 }, { wch: 10 }, { wch: 14 }];
 
     // Tab 3 — Foreman re-import payload (JSON; small, structured)
     var payload = {
-      v: 1, employee: { id: emp.id, name: emp.name, base_rate: emp.base_rate, default_class: emp.default_class },
+      v: 1, employee: { id: emp.id, name: emp.name, default_class: emp.default_class },
       week_starting: STATE.weekStart, entries: tc.entries, submitted_at: tc.submitted_at,
     };
     var s3 = XLSX.utils.aoa_to_sheet([["__TIMECARD_JSON__"], [JSON.stringify(payload)]]);
@@ -744,7 +802,6 @@
       "Total: " + fmtHrs(r.totals.hours) + "h  (Reg " + fmtHrs(r.totals.reg)
         + " | 1.5x " + fmtHrs(r.totals.ot15)
         + " | 2x " + fmtHrs(r.totals.ot2) + ")",
-      "Est. wages: $" + r.totals.wages.toFixed(2),
       "",
       "File: " + fname + " — please attach it from Downloads.",
       "",
@@ -772,6 +829,8 @@
   // that without a backend. The .xlsx files traveling between devices are the
   // real trust boundary; keep them on secure channels.
   var FOREMAN_UNLOCKED = false;
+  // Per-employee unlock — session only; reset on Switch user / reload.
+  var EMPLOYEE_UNLOCKED = false;
   function hashPasscode(p) {
     var enc = new TextEncoder().encode(String(p || ""));
     return crypto.subtle.digest("SHA-256", enc).then(function (buf) {
@@ -857,6 +916,8 @@
         'files your employees send (or tap to pick) and they\'ll appear here for review.</div>' }));
       return;
     }
+    app.appendChild(masterSummaryCard());
+    app.appendChild(wcirbAuditCard());
     // group by week (most recent first)
     var byWeek = {};
     keys.forEach(function (k) {
@@ -933,14 +994,16 @@
   }
 
   function foremanTimecardRow(key, tc) {
-    var rate = (tc.employee && tc.employee.base_rate) || 0;
+    // Rate lives ONLY on the foreman's local roster (never in the xlsx).
+    var rosterEmp = STATE.roster.find(function (re) { return re.id === (tc.employee && tc.employee.id); });
+    var rate = (rosterEmp && rosterEmp.base_rate) || 0;
     var r = computeWeek({ week_starting: tc.week_starting, entries: tc.entries }, rate);
     var row = el("div", { style: "border:1px solid var(--line);border-radius:8px;padding:.6rem;margin:.4rem 0;background:#fff" });
     var head = el("div", { style: "display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem" });
     var info = el("div", { style: "flex:1;min-width:200px" });
     info.innerHTML =
       "<strong>" + esc(tc.employee.name) + "</strong> " +
-      "<small style='color:#666'>$" + (rate || 0).toFixed(2) + "/hr · default " + esc(tc.employee.default_class || "—") + "</small>" +
+      "<small style='color:#666'>" + (rate > 0 ? ("$" + rate.toFixed(2) + "/hr") : "<span style='color:var(--bad)'>⚠ no rate set — add above</span>") + " · default " + esc(tc.employee.default_class || "—") + "</small>" +
       "<div style='font-size:.86rem;color:#444'>Hours: <strong>" + fmtHrs(r.totals.hours) +
       "</strong> (Reg " + fmtHrs(r.totals.reg) + " / 1.5× " + fmtHrs(r.totals.ot15) +
       " / 2× " + fmtHrs(r.totals.ot2) + ") · Est. wages <strong>$" +
@@ -1003,6 +1066,186 @@
     return row;
   }
 
+  // Master summary across all loaded timecards (any week, any employee).
+  // Sits at the top of the imported-timecards section as a dashboard so
+  // the foreman can see the whole picture before drilling into a week.
+  function masterSummaryCard() {
+    var c = el("section", { class: "card" });
+    c.appendChild(el("h2", null, "Master summary"));
+    var loaded = (STATE.foreman && STATE.foreman.loaded) || {};
+    var keys = Object.keys(loaded);
+    var totals = { hours: 0, wages: 0, weeks: {}, employees: {}, approved: 0 };
+    var perEmp = {};
+    keys.forEach(function (k) {
+      var tc = loaded[k];
+      var rosterEmp = STATE.roster.find(function (re) { return re.id === (tc.employee && tc.employee.id); });
+      var rate = (rosterEmp && rosterEmp.base_rate) || 0;
+      var r = computeWeek({ week_starting: tc.week_starting, entries: tc.entries }, rate);
+      totals.hours += r.totals.hours;
+      totals.wages += r.totals.wages;
+      totals.weeks[tc.week_starting] = true;
+      totals.employees[(tc.employee && tc.employee.id) || tc.employee.name] = tc.employee.name;
+      if (tc.approved) totals.approved++;
+      var eid = (tc.employee && tc.employee.id) || tc.employee.name;
+      perEmp[eid] = perEmp[eid] || { name: tc.employee.name, id: tc.employee.id, weeks: 0, hours: 0, wages: 0, rateMissing: rate === 0 };
+      perEmp[eid].weeks++;
+      perEmp[eid].hours += r.totals.hours;
+      perEmp[eid].wages += r.totals.wages;
+      if (rate === 0) perEmp[eid].rateMissing = true;
+    });
+    var grid = el("div", { style: "display:grid;grid-template-columns:repeat(2,1fr);gap:.4rem;margin-bottom:.6rem" });
+    function stat2(label, val) {
+      var d = el("div", { style: "background:var(--chip);border-radius:8px;padding:.5rem;text-align:center" });
+      d.innerHTML = "<div style='font-size:.7rem;color:#555'>" + esc(label) + "</div>" +
+        "<div style='font-size:1.05rem;font-weight:700;color:var(--navy)'>" + esc(val) + "</div>";
+      return d;
+    }
+    grid.appendChild(stat2("Timecards", String(keys.length) + " (" + totals.approved + " approved)"));
+    grid.appendChild(stat2("Weeks covered", String(Object.keys(totals.weeks).length)));
+    grid.appendChild(stat2("Employees", String(Object.keys(totals.employees).length)));
+    grid.appendChild(stat2("Total hours", fmtHrs(totals.hours)));
+    grid.appendChild(stat2("Total wages", "$" + totals.wages.toFixed(2)));
+    var rangeISO = Object.keys(totals.weeks).sort();
+    grid.appendChild(stat2("Date range", rangeISO.length ? (rangeISO[0] + " — " + rangeISO[rangeISO.length - 1]) : "—"));
+    c.appendChild(grid);
+    var tbl = el("table", { style: "width:100%;border-collapse:collapse;font-size:.85rem;margin-top:.3rem" });
+    tbl.innerHTML = "<tr style='text-align:left;background:var(--chip)'>" +
+      "<th style='padding:.3rem'>Employee</th><th style='text-align:right'>Weeks</th>" +
+      "<th style='text-align:right'>Hours</th><th style='text-align:right'>Wages</th></tr>";
+    Object.keys(perEmp).sort(function (a, b) {
+      return perEmp[a].name < perEmp[b].name ? -1 : 1;
+    }).forEach(function (eid) {
+      var p = perEmp[eid];
+      var tr = el("tr", { style: "border-top:1px solid var(--line)" });
+      tr.innerHTML = "<td style='padding:.3rem'>" + esc(p.name) + (p.rateMissing ? " <span style='color:var(--bad);font-size:.75rem'>(no rate)</span>" : "") + "</td>" +
+        "<td style='padding:.3rem;text-align:right'>" + p.weeks + "</td>" +
+        "<td style='padding:.3rem;text-align:right'>" + fmtHrs(p.hours) + "</td>" +
+        "<td style='padding:.3rem;text-align:right'>$" + p.wages.toFixed(2) + "</td>";
+      tbl.appendChild(tr);
+    });
+    c.appendChild(tbl);
+    return c;
+  }
+
+  // WCIRB date-range audit. Foreman picks a from/to range; output xlsx with
+  // gross hours and gross wages per employee per classification (the standard
+  // ask from State Fund / WCIRB auditors).
+  function wcirbAuditCard() {
+    var c = el("section", { class: "card" });
+    c.appendChild(el("h2", null, "WCIRB audit report"));
+    c.appendChild(el("div", { class: "empty", style: "margin-bottom:.5rem" },
+      "Pick a date range. Generates a workbook with gross hours and wages per employee per classification — the standard format auditors ask for."));
+    var today = new Date();
+    var qStartIdx = Math.floor(today.getMonth() / 3) * 3;
+    var thisQS = new Date(today.getFullYear(), qStartIdx, 1);
+    var thisQE = new Date(today.getFullYear(), qStartIdx + 3, 0);
+    var grid = el("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.4rem" });
+    var fromI = el("input", { type: "date", value: iso(thisQS) });
+    var toI = el("input", { type: "date", value: iso(thisQE) });
+    function wrap(lbl, inp) {
+      var w = el("label", { class: "fld", style: "margin:0" }, lbl);
+      w.appendChild(inp); return w;
+    }
+    grid.appendChild(wrap("From", fromI));
+    grid.appendChild(wrap("To", toI));
+    c.appendChild(grid);
+    var qBar = el("div", { style: "display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.5rem;font-size:.78rem" });
+    function quickQ(label, ms, me) {
+      var b = el("button", { class: "ghost", type: "button", style: "padding:.2rem .55rem" }, label);
+      b.addEventListener("click", function () { fromI.value = iso(ms); toI.value = iso(me); });
+      return b;
+    }
+    var y = today.getFullYear();
+    var lastQS = new Date(y, qStartIdx - 3, 1);
+    var lastQE = new Date(y, qStartIdx, 0);
+    qBar.appendChild(quickQ("YTD", new Date(y, 0, 1), today));
+    qBar.appendChild(quickQ("This Q", thisQS, thisQE));
+    qBar.appendChild(quickQ("Last Q", lastQS, lastQE));
+    qBar.appendChild(quickQ("Last year", new Date(y - 1, 0, 1), new Date(y - 1, 11, 31)));
+    c.appendChild(qBar);
+    var go = el("button", { class: "primary", type: "button" }, "Generate audit workbook");
+    go.addEventListener("click", function () { runWcirbAudit(fromI.value, toI.value); });
+    c.appendChild(go);
+    return c;
+  }
+
+  function runWcirbAudit(fromISO, toISO) {
+    if (!window.XLSX) { alert("xlsx engine missing — reload while online."); return; }
+    if (!fromISO || !toISO || fromISO > toISO) { alert("Pick a valid date range."); return; }
+    var loaded = (STATE.foreman && STATE.foreman.loaded) || {};
+    var keys = Object.keys(loaded);
+    if (!keys.length) { alert("No timecards loaded."); return; }
+    var bucket = {}; var grandH = 0, grandW = 0;
+    keys.forEach(function (k) {
+      var tc = loaded[k];
+      var rosterEmp = STATE.roster.find(function (re) { return re.id === (tc.employee && tc.employee.id); });
+      var rate = (rosterEmp && rosterEmp.base_rate) || 0;
+      var filtered = (tc.entries || []).filter(function (e) {
+        return e.date >= fromISO && e.date <= toISO;
+      });
+      if (!filtered.length) return;
+      var r = computeWeek({ week_starting: tc.week_starting, entries: filtered }, rate);
+      Object.keys(r.byClass).forEach(function (cc) {
+        var bk = ((tc.employee && tc.employee.id) || tc.employee.name) + "||" + cc;
+        bucket[bk] = bucket[bk] || {
+          name: tc.employee.name || "(unknown)",
+          id: (tc.employee && tc.employee.id) || "",
+          cls: cc, hours: 0, wages: 0, rate: rate,
+        };
+        bucket[bk].hours += r.byClass[cc].hours;
+        bucket[bk].wages += r.byClass[cc].wages;
+      });
+      grandH += r.totals.hours;
+      grandW += r.totals.wages;
+    });
+    if (!Object.keys(bucket).length) { alert("No entries in that date range."); return; }
+    var rows1 = [
+      ["WCIRB Audit Report — Employee x Classification"],
+      ["From", fromISO, "To", toISO],
+      ["Generated", new Date().toISOString()],
+      [],
+      ["Employee", "ID", "WCIRB", "Classification", "Gross hours", "Rate", "Gross wages"],
+    ];
+    Object.keys(bucket).sort(function (a, b) {
+      var x = bucket[a], yy = bucket[b];
+      if (x.name !== yy.name) return x.name < yy.name ? -1 : 1;
+      return x.cls < yy.cls ? -1 : 1;
+    }).forEach(function (bk) {
+      var b = bucket[bk];
+      var w = window.TC_WCIRB.find(function (x) { return x.code === b.cls; });
+      rows1.push([b.name, b.id, b.cls, w ? w.title : "(unknown)", b.hours, b.rate, b.wages]);
+    });
+    rows1.push([]);
+    rows1.push(["", "", "", "TOTAL", grandH, "", grandW]);
+    var s1 = XLSX.utils.aoa_to_sheet(rows1);
+    s1["!cols"] = [{ wch: 22 }, { wch: 8 }, { wch: 8 }, { wch: 40 }, { wch: 11 }, { wch: 8 }, { wch: 13 }];
+    var byCls = {};
+    Object.keys(bucket).forEach(function (bk) {
+      var b = bucket[bk];
+      byCls[b.cls] = byCls[b.cls] || { hours: 0, wages: 0 };
+      byCls[b.cls].hours += b.hours;
+      byCls[b.cls].wages += b.wages;
+    });
+    var rows2 = [
+      ["WCIRB Class Roll-up — All Employees"],
+      ["From", fromISO, "To", toISO],
+      [],
+      ["WCIRB", "Classification", "Total hours", "Total wages"],
+    ];
+    Object.keys(byCls).sort().forEach(function (cc) {
+      var w = window.TC_WCIRB.find(function (x) { return x.code === cc; });
+      rows2.push([cc, w ? w.title : "(unknown)", byCls[cc].hours, byCls[cc].wages]);
+    });
+    rows2.push([]);
+    rows2.push(["", "TOTAL", grandH, grandW]);
+    var s2 = XLSX.utils.aoa_to_sheet(rows2);
+    s2["!cols"] = [{ wch: 10 }, { wch: 44 }, { wch: 13 }, { wch: 14 }];
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, s1, "Employee x Class");
+    XLSX.utils.book_append_sheet(wb, s2, "Class Roll-up");
+    XLSX.writeFile(wb, "WCIRB_Audit_" + fromISO + "_to_" + toISO + ".xlsx");
+  }
+
   function exportConsolidated() {
     if (!window.XLSX) { alert("xlsx engine missing — reload while online."); return; }
     var loaded = (STATE.foreman && STATE.foreman.loaded) || {};
@@ -1011,7 +1254,8 @@
     var byClass = {}, perEW = [], detail = [];
     keys.forEach(function (k) {
       var tc = loaded[k];
-      var rate = (tc.employee && tc.employee.base_rate) || 0;
+      var rosterEmp = STATE.roster.find(function (re) { return re.id === (tc.employee && tc.employee.id); });
+      var rate = (rosterEmp && rosterEmp.base_rate) || 0;
       var r = computeWeek({ week_starting: tc.week_starting, entries: tc.entries }, rate);
       perEW.push({
         name: tc.employee.name, id: tc.employee.id, rate: rate, week: tc.week_starting,
