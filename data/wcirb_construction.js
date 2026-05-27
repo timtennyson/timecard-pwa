@@ -15,16 +15,21 @@
  * worker's description (offline keyword match, no AI needed).
  */
 window.TC_WCIRB = [
-  // ---- Residential / building carpentry ----
-  { code: "5645", title: "Carpentry — Detached one or two family dwellings", group: "construction",
+  // ---- Carpentry (high-wage) ----
+  // 5403 is the DEFAULT for general carpentry work (commercial, multi-family,
+  // most ABCI jobs). 5645 only when the project is strictly a detached one-
+  // or two-family dwelling (incl. ADUs) — most generic carpentry stays on 5403.
+  { code: "5403", title: "Carpentry — N.O.C. (default)", group: "construction",
     keywords: ["frame", "framing", "framer", "stud", "joist", "rafter", "sheath",
                "shear", "header", "blocking", "deck", "decking", "trim", "finish carpentry",
                "cabinet", "door", "window", "siding", "fascia", "soffit", "subfloor",
-               "wall", "stair", "handrail", "residential", "adu", "dwelling", "garage build",
-               "shed build", "addition"] },
-  { code: "5403", title: "Carpentry — N.O.C. (commercial / multi-family)", group: "construction",
-    keywords: ["commercial framing", "multi-family", "multi family", "mixed use", "office build",
+               "wall", "stair", "handrail", "addition", "commercial framing",
+               "multi-family", "multi family", "mixed use", "office build",
                "tenant improvement", "ti", "store front", "storefront"] },
+  { code: "5645", title: "Carpentry — Detached 1-2 family dwelling / ADU",
+    group: "construction",
+    keywords: ["detached residence", "detached residential",
+               "single family residence", "duplex", "adu", "owner builder home"] },
 
   // ---- Trades ----
   { code: "5474", title: "Painting / Paperhanging — N.O.C.", group: "construction",
