@@ -1,13 +1,18 @@
 /* California WCIRB construction classification codes — STARTER list.
- * HIGH-WAGE classifications only (low-wage dual variants like 5651/5432/5188
- * intentionally omitted — add them back if any worker is paid below the
- * dual-wage threshold and needs to be classed there).
+ * HIGH-WAGE variants only on dual-wage classes; the known low-wage duals are
+ * intentionally omitted (5651 carpentry-residential, 5432 carpentry-NOC, 5188
+ * plumbing, 5482 painting, 5140 electrical, 5027 masonry, 5215 concrete, 5553
+ * roofing, 6220 excavation-NOC, 6307 sewer, 6316 water-mains, 5484 plastering).
+ * Add a low-wage variant back ONLY if a worker is paid below the dual-wage
+ * threshold and must be classed there.
+ *
+ * VERIFY this list against the State Fund / WCIRB declaration on the actual
+ * policy before going live — codes change, and some single-class entries here
+ * may not appear on a given policy. Rates are policy-specific and NOT stored
+ * here.
  *
  * Each entry includes `keywords` used to auto-classify entries from the
- * worker's description (offline keyword match, no AI needed). Refine the
- * keywords for your trade mix as you use the app.
- *
- * Rates are policy-specific and NOT stored here.
+ * worker's description (offline keyword match, no AI needed).
  */
 window.TC_WCIRB = [
   // ---- Residential / building carpentry ----
@@ -36,13 +41,13 @@ window.TC_WCIRB = [
   { code: "5538", title: "Sheet Metal Work — installation (HVAC ducting)", group: "construction",
     keywords: ["hvac", "duct", "ductwork", "sheet metal", "supply register", "return air",
                "condenser", "furnace", "mini split", "minisplit", "flue"] },
-  { code: "5703", title: "Roofing", group: "construction",
+  { code: "5552", title: "Roofing — All Kinds & Drivers", group: "construction",
     keywords: ["roof", "roofing", "shingle", "underlayment", "flashing", "gutter",
                "downspout", "ridge", "valley", "tear off", "tear-off", "torch down"] },
   { code: "5022", title: "Masonry — N.O.C.", group: "construction",
     keywords: ["brick", "block", "cmu", "stone", "masonry", "mortar", "grout cell",
                "veneer stone"] },
-  { code: "5028", title: "Plastering / Stucco Work", group: "construction",
+  { code: "5485", title: "Plastering / Stucco Work — N.O.C.", group: "construction",
     keywords: ["stucco", "plaster", "lath", "scratch coat", "brown coat", "finish coat"] },
 
   // ---- Site / civil ----
