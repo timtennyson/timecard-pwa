@@ -286,8 +286,11 @@
     STATE.roster.forEach(function (e) {
       var b = el("button", { class: "ghost", type: "button",
         style: "display:block;width:100%;text-align:left;margin:.25rem 0;padding:.6rem" });
-      b.innerHTML = "<strong>" + esc(e.name) + "</strong>  <small style='color:#555'>$" +
-        (parseFloat(e.base_rate) || 0).toFixed(2) + "/hr · " + esc(e.default_class || "—") + "</small>";
+      // Pay rate intentionally NOT shown here — the picker shows OTHER employees
+      // too, and each employee's wage is confidential. You'll see your own rate
+      // after you tap yourself (pinned-user header, week summary, your xlsx).
+      b.innerHTML = "<strong>" + esc(e.name) + "</strong>  <small style='color:#555'>" +
+        esc(e.default_class || "—") + "</small>";
       b.addEventListener("click", function () {
         STATE.currentEmployeeId = e.id; scheduleSave(); render();
       });
